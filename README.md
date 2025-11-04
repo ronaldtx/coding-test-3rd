@@ -234,6 +234,26 @@ CREATE TABLE documents (
     parsing_status VARCHAR(50) DEFAULT 'pending',
     error_message TEXT
 );
+
+CREATE TABLE document_embeddings (
+  id SERIAL PRIMARY KEY,
+  document_id INTEGER REFERENCES documents(id),
+  fund_id INTEGER,
+  content TEXT NOT NULL,
+  embedding VECTOR,
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE document_chunks (
+  id SERIAL PRIMARY KEY,
+  document_id INTEGER REFERENCES documents(id),
+  page INTEGER,
+  content TEXT,
+  embedding FLOAT[]
+);
+
+
 ```
 
 ---
@@ -347,11 +367,17 @@ fund-analysis-system/
 │   │   │   │   ├── funds.py
 │   │   │   │   ├── chat.py
 │   │   │   │   └── metrics.py
+│   │   │   ├── routes/
+│   │   │   │   └── document_routes.py
 │   │   │   └── deps.py
 │   │   ├── core/
 │   │   │   ├── config.py
-│   │   │   └── security.py
+│   │   │   └── exceptions.py
 │   │   ├── db/
+│   │   │   ├── migrations/
+│   │   │   │   └── versions/
+│   │   │   │       ├── 96d4f7cffbed_add_document_chunks_and_document_tables.py
+│   │   │   │       └── f84934a9120a_add_embedding_column_to_document_chunks.py
 │   │   │   ├── base.py
 │   │   │   ├── session.py
 │   │   │   └── init_db.py
@@ -360,21 +386,32 @@ fund-analysis-system/
 │   │   │   ├── transaction.py
 │   │   │   └── document.py
 │   │   ├── schemas/
-│   │   │   ├── fund.py
-│   │   │   ├── transaction.py
+│   │   │   ├── chat.py
 │   │   │   ├── document.py
-│   │   │   └── chat.py
+│   │   │   ├── document_schema.py
+│   │   │   ├── fund.py
+│   │   │   └── transaction.py
+│   │   ├── script/
+│   │   │   └── reindex_embeddings.py
 │   │   ├── services/
+│   │   │   ├── document_parser.py
 │   │   │   ├── document_processor.py
-│   │   │   ├── table_parser.py
-│   │   │   ├── vector_store.py
+│   │   │   ├── embedding_service.py
+│   │   │   ├── file_validator.py
+│   │   │   ├── local_embedding_service.py
+│   │   │   ├── metrics_calculator.py
 │   │   │   ├── query_engine.py
-│   │   │   └── metrics_calculator.py
+│   │   │   ├── rag_service.py
+│   │   │   ├── table_parser.py
+│   │   │   └── vector_store.py
+│   │   ├── tasks/
+│   │   │   └── document_tasks.py
 │   │   └── main.py
 │   ├── tests/
+│   │   ├── test_chat.py
 │   │   ├── test_document_processor.py
-│   │   ├── test_metrics.py
-│   │   └── test_api.py
+│   │   ├── test_documents.py
+│   │   └── test_funds.py
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── alembic/
