@@ -1,9 +1,9 @@
 """
 Document Pydantic schemas
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 
 class DocumentBase(BaseModel):
@@ -31,8 +31,7 @@ class Document(DocumentBase):
     parsing_status: str
     error_message: Optional[str] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentStatus(BaseModel):
@@ -49,3 +48,13 @@ class DocumentUploadResponse(BaseModel):
     task_id: Optional[str] = None
     status: str
     message: str
+
+
+class DocumentTable(BaseModel):
+    """Parsed table schema"""
+    id: int
+    document_id: int
+    table_json: dict
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

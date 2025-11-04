@@ -14,7 +14,7 @@ router = APIRouter()
 @router.get("/funds/{fund_id}/metrics")
 async def get_fund_metrics(
     fund_id: int,
-    metric: str = Query(None, regex="^(dpi|irr|tvpi|rvpi|pic|all)$"),
+    metric: str = Query(None, pattern="^(dpi|irr|tvpi|rvpi|pic|all)$"),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """

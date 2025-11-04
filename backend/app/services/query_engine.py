@@ -1,6 +1,7 @@
 """
 Query engine service for RAG-based question answering
 """
+import os
 from typing import Dict, Any, List, Optional
 import time
 from langchain_openai import ChatOpenAI
@@ -17,7 +18,7 @@ class QueryEngine:
     
     def __init__(self, db: Session):
         self.db = db
-        self.vector_store = VectorStore()
+        self.vector_store = VectorStore(db=db)
         self.metrics_calculator = MetricsCalculator(db)
         self.llm = self._initialize_llm()
     
@@ -31,69 +32,67 @@ class QueryEngine:
             )
         else:
             # Fallback to local LLM
-            return Ollama(model="llama2")
+            return Ollama(
+                base_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
+                model=os.getenv("OLLAMA_MODEL", "llama3.2")
+            )
+            # return Ollama(model="llama2")
     
     async def process_query(
-        self, 
-        query: str, 
-        fund_id: Optional[int] = None,
-        conversation_history: List[Dict[str, str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Process a user query using RAG
-        
-        Args:
-            query: User question
-            fund_id: Optional fund ID for context
-            conversation_history: Previous conversation messages
-            
-        Returns:
-            Response with answer, sources, and metrics
-        """
+            self,
+            query: str,
+            fund_id: Optional[int] = None,
+            conversation_history: List[Dict[str, str]] = None
+        ) -> Dict[str, Any]:
+        """Process a user query using RAG pipeline"""
         start_time = time.time()
-        
-        # Step 1: Classify query intent
+
+        # Step 1. Classify query intent
         intent = await self._classify_intent(query)
-        
-        # Step 2: Retrieve relevant context from vector store
+
+        # Step 2. Retrieve relevant chunks from pgvector
         filter_metadata = {"fund_id": fund_id} if fund_id else None
         relevant_docs = await self.vector_store.similarity_search(
             query=query,
             k=settings.TOP_K_RESULTS,
             filter_metadata=filter_metadata
         )
-        
-        # Step 3: Calculate metrics if needed
+
+        # Step 3. Calculate fund metrics if relevant
         metrics = None
         if intent == "calculation" and fund_id:
             metrics = self.metrics_calculator.calculate_all_metrics(fund_id)
-        
-        # Step 4: Generate response using LLM
+
+        # Step 4. Generate final answer using context
         answer = await self._generate_response(
             query=query,
             context=relevant_docs,
             metrics=metrics,
             conversation_history=conversation_history or []
         )
-        
-        processing_time = time.time() - start_time
-        
+
+        processing_time = round(time.time() - start_time, 2)
+
+        # Step 5. Return structured response
         return {
             "answer": answer,
             "sources": [
                 {
                     "content": doc["content"],
+                    "page": doc.get("page"),
+                    "score": doc.get("score"),
                     "metadata": {
-                        k: v for k, v in doc.items() 
-                        if k not in ["content", "score"]
-                    },
-                    "score": doc.get("score")
+                        "document_id": doc.get("document_id"),
+                        "source_type": "database",
+                        "retrieved_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                    }
                 }
                 for doc in relevant_docs
             ],
             "metrics": metrics,
-            "processing_time": round(processing_time, 2)
+            "processing_time": processing_time
         }
+
     
     async def _classify_intent(self, query: str) -> str:
         """
@@ -131,77 +130,37 @@ class QueryEngine:
         return "general"
     
     async def _generate_response(
-        self,
-        query: str,
-        context: List[Dict[str, Any]],
-        metrics: Optional[Dict[str, Any]],
-        conversation_history: List[Dict[str, str]]
-    ) -> str:
-        """Generate response using LLM"""
-        
-        # Build context string
-        context_str = "\n\n".join([
-            f"[Source {i+1}]\n{doc['content']}"
-            for i, doc in enumerate(context[:3])  # Use top 3 sources
-        ])
-        
-        # Build metrics string
-        metrics_str = ""
-        if metrics:
-            metrics_str = "\n\nAvailable Metrics:\n"
-            for key, value in metrics.items():
-                if value is not None:
-                    metrics_str += f"- {key.upper()}: {value}\n"
-        
-        # Build conversation history string
-        history_str = ""
-        if conversation_history:
-            history_str = "\n\nPrevious Conversation:\n"
-            for msg in conversation_history[-3:]:  # Last 3 messages
-                history_str += f"{msg['role']}: {msg['content']}\n"
-        
-        # Create prompt
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a financial analyst assistant specializing in private equity fund performance.
+            self,
+            query: str,
+            context: List[Dict[str, Any]],
+            metrics: Optional[Dict[str, Any]],
+            conversation_history: List[Dict[str, str]]
+        ) -> str:
+        """Generate response using local LLM (Ollama)"""
+        context_text = "\n\n".join(
+            [f"[Page {doc.get('page', '?')}]\n{doc['content']}" for doc in context]
+        )
 
-Your role:
-- Answer questions about fund performance using provided context
-- Calculate metrics like DPI, IRR when asked
-- Explain complex financial terms in simple language
-- Always cite your sources from the provided documents
+        prompt = f"""
+You are a fund analysis assistant with access to financial documents.
 
-When calculating:
-- Use the provided metrics data
-- Show your work step-by-step
-- Explain any assumptions made
+Use ONLY the following context extracted from PDF documents:
+{context_text}
 
-Format your responses:
-- Be concise but thorough
-- Use bullet points for lists
-- Bold important numbers using **number**
-- Provide context for metrics"""),
-            ("user", """Context from documents:
-{context}
-{metrics}
-{history}
+Metrics (if available): {metrics}
+
+Previous conversation (if any): {conversation_history}
 
 Question: {query}
 
-Please provide a helpful answer based on the context and metrics provided.""")
-        ])
-        
-        # Generate response
-        messages = prompt.format_messages(
-            context=context_str,
-            metrics=metrics_str,
-            history=history_str,
-            query=query
-        )
-        
+Answer clearly and concisely based only on the provided context.
+If the context doesn't have enough information, say so explicitly.
+"""
+
         try:
-            response = self.llm.invoke(messages)
-            if hasattr(response, 'content'):
+            response = self.llm.invoke(prompt)
+            if hasattr(response, "content"):
                 return response.content
             return str(response)
         except Exception as e:
-            return f"I apologize, but I encountered an error generating a response: {str(e)}"
+            return f"Error generating response: {str(e)}"

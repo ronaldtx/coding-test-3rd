@@ -31,6 +31,7 @@ anthropic==0.8.1
 
 # Embeddings
 sentence-transformers==2.2.2
+huggingface_hub==0.14.1
 
 # Task Queue
 celery==5.3.4

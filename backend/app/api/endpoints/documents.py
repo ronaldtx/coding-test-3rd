@@ -4,18 +4,26 @@ Document API endpoints
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List
+import pdfplumber
 import os
+import io, re
 import shutil
 from datetime import datetime
 from app.db.session import get_db
 from app.models.document import Document
+from app.models.transaction import CapitalCall
+from app.models.transaction import Distribution
+from app.models.transaction import Adjustment
 from app.schemas.document import (
     Document as DocumentSchema,
     DocumentUploadResponse,
-    DocumentStatus
+    DocumentStatus,
+    DocumentTable
 )
 from app.services.document_processor import DocumentProcessor
+from app.services.table_parser import TableParser
 from app.core.config import settings
+from app.tasks.document_tasks import process_document_task
 
 router = APIRouter()
 
@@ -32,7 +40,7 @@ async def upload_document(
     # Validate file type
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-    
+
     # Validate file size
     file.file.seek(0, 2)
     file_size = file.file.tell()
@@ -43,18 +51,42 @@ async def upload_document(
             status_code=400, 
             detail=f"File size exceeds maximum allowed size of {settings.MAX_UPLOAD_SIZE} bytes"
         )
-    
+
     # Create upload directory if it doesn't exist
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     
     # Save file
+    pdf_bytes = await file.read()
+    if not pdf_bytes or len(pdf_bytes) < 100:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty or invalid")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_{file.filename}"
     file_path = os.path.join(settings.UPLOAD_DIR, filename)
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
+
+    # save pdf to disk
+    with open(file_path, "wb") as f:
+        f.write(pdf_bytes)
+
+    # open PDF from memory bytes
+    try:
+        pdf = pdfplumber.open(io.BytesIO(pdf_bytes))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal membaca PDF: {e}")
+
+    text_pages = []
+    for i, page in enumerate(pdf.pages):
+        page_text = page.extract_text()
+        if page_text:
+            text_pages.append(page_text)
+        else:
+            print(f"[WARNING] Page {i+1} empty or just images.")
+    pdf.close()
+
+    if not text_pages:
+        raise HTTPException(status_code=400, detail="No text can be extraced from PDF.")
+
+    text = "\n".join(text_pages)
     # Create document record
     document = Document(
         fund_id=fund_id,
@@ -68,12 +100,52 @@ async def upload_document(
     
     # Start background processing
     background_tasks.add_task(
-        process_document_task,
-        document.id,
+        DocumentProcessor(db).process_document,
         file_path,
+        document.id,
         fund_id or 1  # Default fund_id if not provided
     )
-    
+
+    capital_calls = re.findall(r"(\d{4}-\d{2}-\d{2}).*?Call\s\d.*?\$([\d,]+)", text)
+    for date_str, amount_str in capital_calls:
+        amount = float(amount_str.replace(",", ""))
+        db.add(CapitalCall(
+            fund_id=fund_id,
+            call_date=date_str,
+            call_type="Capital Call",
+            amount=amount,
+            description="Imported from PDF",
+            created_at=datetime.utcnow()
+        ))
+
+    distributions = re.findall(r"(\d{4}-\d{2}-\d{2}).*?(Income|Return of Capital).*?\$([\d,]+)", text)
+    for date_str, dtype, amount_str in distributions:
+        amount = float(amount_str.replace(",", ""))
+        db.add(Distribution(
+            fund_id=fund_id,
+            distribution_date=date_str,
+            distribution_type=dtype,
+            is_recallable=False,
+            amount=amount,
+            description="Imported from PDF",
+            created_at=datetime.utcnow()
+        ))
+
+    adjustments = re.findall(r"(\d{4}-\d{2}-\d{2}).*?(Adjustment).*?\$?(-?[\d,]+)", text)
+    for date_str, atype, amount_str in adjustments:
+        amount = float(amount_str.replace(",", ""))
+        db.add(Adjustment(
+            fund_id=fund_id,
+            adjustment_date=date_str,
+            adjustment_type=atype,
+            amount=amount,
+            description="Imported from PDF",
+            created_at=datetime.utcnow()
+        ))
+
+    db.commit()
+
+
     return DocumentUploadResponse(
         document_id=document.id,
         task_id=None,

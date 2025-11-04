@@ -107,7 +107,7 @@ async def delete_fund(fund_id: int, db: Session = Depends(get_db)):
 @router.get("/{fund_id}/transactions", response_model=TransactionList)
 async def get_fund_transactions(
     fund_id: int,
-    transaction_type: str = Query(..., regex="^(capital_calls|distributions|adjustments)$"),
+    transaction_type: str = Query(..., pattern="^(capital_calls|distributions|adjustments)$"),
     page: int = 1,
     limit: int = 50,
     db: Session = Depends(get_db)

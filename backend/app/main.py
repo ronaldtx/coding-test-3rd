@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.endpoints import documents, funds, chat, metrics
+from app.api.routes import document_routes
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -28,6 +29,7 @@ app.include_router(documents.router, prefix="/api/documents", tags=["documents"]
 app.include_router(funds.router, prefix="/api/funds", tags=["funds"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["metrics"])
+app.include_router(document_routes.router, prefix="/api/document_routes", tags=["document_routes"])
 
 
 @app.get("/")

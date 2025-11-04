@@ -21,7 +21,7 @@ router = APIRouter()
 # In-memory conversation storage (replace with Redis/DB in production)
 conversations: Dict[str, Dict[str, Any]] = {}
 
-
+# POST /query — main RAG chat endpoint
 @router.post("/query", response_model=ChatQueryResponse)
 async def process_chat_query(
     request: ChatQueryRequest,
@@ -60,7 +60,7 @@ async def process_chat_query(
     
     return ChatQueryResponse(**response)
 
-
+# POST /conversations — create new conversation
 @router.post("/conversations", response_model=Conversation)
 async def create_conversation(request: ConversationCreate):
     """Create a new conversation"""
@@ -81,7 +81,7 @@ async def create_conversation(request: ConversationCreate):
         updated_at=conversations[conversation_id]["updated_at"]
     )
 
-
+# GET /conversations/{conversation_id} — get history
 @router.get("/conversations/{conversation_id}", response_model=Conversation)
 async def get_conversation(conversation_id: str):
     """Get conversation history"""
@@ -99,6 +99,7 @@ async def get_conversation(conversation_id: str):
     )
 
 
+# DELETE /conversations/{conversation_id} — delete history
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str):
     """Delete a conversation"""
